@@ -94,7 +94,7 @@
 
 using namespace llvm;
 
-llvm::DebugLoc cloneDebugLocWithNewFilename(llvm::Instruction *inst,
+llvm::DebugLoc cloneDebugLocInst(const Instruction *inst,
                                             const std::string &newFilename) {
   llvm::DebugLoc oldLoc = inst->getDebugLoc();
   if (!oldLoc) {
@@ -104,25 +104,73 @@ llvm::DebugLoc cloneDebugLocWithNewFilename(llvm::Instruction *inst,
   llvm::LLVMContext &context = inst->getContext();
   llvm::DILocation *oldDILoc = oldLoc.get();
 
-  // 获取或创建新的 DIFile
+  // get or create new DIFile
   llvm::DIFile *oldFile = oldDILoc->getFile();
   llvm::DIFile *newFile =
       llvm::DIFile::get(context, newFilename, oldFile->getDirectory());
 
-  // 创建一个新的 DILexicalBlockFile 来包装新的文件
+  // create a new DILexicalBlockFile to wrap the new DIFile
   llvm::DIScope *oldScope = oldDILoc->getScope();
   llvm::DILexicalBlockFile *newScope =
       llvm::DILexicalBlockFile::get(context, oldScope, newFile,
                                     0 // discriminator
       );
 
-  // 使用新的 scope 创建新的 DILocation
+  // use new scope or create DILocation
   llvm::DILocation *newDILoc =
       llvm::DILocation::get(context, oldDILoc->getLine(), oldDILoc->getColumn(),
                             newScope, oldDILoc->getInlinedAt());
 
   return llvm::DebugLoc(newDILoc);
 }
+
+llvm::DebugLoc cloneDebugLocWithNewFilename(const Function *F,
+                                            const std::string &newFilename)
+{
+  if(auto SP = F->getSubprogram()) {
+    DebugLoc oldLoc =
+        DILocation::get(SP->getContext(), SP->getScopeLine(), 0, SP);
+    llvm::LLVMContext &context = SP->getContext();
+    llvm::DILocation *oldDILoc = oldLoc.get();
+
+    // get and create DIFile
+    llvm::DIFile *oldFile = oldDILoc->getFile();
+    llvm::DIFile *newFile =
+        llvm::DIFile::get(context, newFilename, oldFile->getDirectory());
+
+    // create a new DILexicalBlockFile to wrap the new file
+    llvm::DIScope *oldScope = oldDILoc->getScope();
+    llvm::DILexicalBlockFile *newScope =
+        llvm::DILexicalBlockFile::get(context, oldScope, newFile,
+                                      0 // discriminator
+        );
+
+    // use new scope or create new DILocation
+    llvm::DILocation *newDILoc =
+        llvm::DILocation::get(context, oldDILoc->getLine(), oldDILoc->getColumn(),
+                              newScope, oldDILoc->getInlinedAt());
+
+    return llvm::DebugLoc(newDILoc);
+  }
+  return llvm::DebugLoc();
+}
+
+llvm::DebugLoc cloneDebugLocWithNewFilename(const Instruction *inst,
+                                            const std::string &newFilename, const Function *F = nullptr)
+{
+  DebugLoc dloc = cloneDebugLocInst(inst, newFilename);
+  if(dloc)
+    return dloc;
+  if (F) {
+    dloc = cloneDebugLocWithNewFilename(F, newFilename);
+    if (dloc) {
+      return dloc;
+    }
+  }
+  errs() << "Warning: Cannot clone debug location with new filename. in cloneDebugLocWithNewFilename(Instruction *inst, Function *F, const std::string &newFilename)\n";
+  return DebugLoc();
+}
+
 
 #define DEBUG_TYPE "asan"
 
@@ -1175,7 +1223,7 @@ struct FunctionStackPoisoner : public InstVisitor<FunctionStackPoisoner> {
     IRBuilder<> IRB(InstBefore);
     // Debloat
     DebugLoc newLoc = cloneDebugLocWithNewFilename(
-        InstBefore, "Construct_AddressSanitizer.cpp");
+        InstBefore, "Construct_AddressSanitizer.cpp_1", &F);
     IRB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     Value *DynamicAreaPtr = IRB.CreatePtrToInt(SavedStack, IntptrTy);
@@ -1428,7 +1476,7 @@ void AddressSanitizer::instrumentMemIntrinsic(MemIntrinsic *MI,
   InstrumentationIRBuilder IRB(MI);
   // Debloat
   DebugLoc newLoc =
-      cloneDebugLocWithNewFilename(MI, "Instrumentation_AddressSanitizer.cpp");
+      cloneDebugLocWithNewFilename(MI, "Instrumentation_AddressSanitizer.cpp_2");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   if (isa<MemTransferInst>(MI)) {
@@ -1565,7 +1613,7 @@ void AddressSanitizer::getInterestingMemoryOperands(
       IRBuilder IB(I);
       // Debloat
       DebugLoc newLoc =
-          cloneDebugLocWithNewFilename(I, "Construct_AddressSanitizer.cpp");
+          cloneDebugLocWithNewFilename(I, "Construct_AddressSanitizer.cpp_3");
       IB.SetCurrentDebugLocation(newLoc);
       // Debloat end
       Value *Mask = CI->getOperand(1 + OpOffset);
@@ -1690,7 +1738,7 @@ void AddressSanitizer::instrumentPointerComparisonOrSubtraction(
   IRBuilder<> IRB(I);
   // Debloat
   DebugLoc newLoc =
-      cloneDebugLocWithNewFilename(I, "Construct_AddressSanitizer.cpp");
+      cloneDebugLocWithNewFilename(I, "Construct_AddressSanitizer.cpp_4");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   FunctionCallee F = isa<ICmpInst>(I) ? AsanPtrCmpFunction : AsanPtrSubFunction;
@@ -1742,7 +1790,7 @@ void AddressSanitizer::instrumentMaskedLoadOrStore(
   IRBuilder IB(I);
   // Debloat
   DebugLoc newLoc =
-      cloneDebugLocWithNewFilename(I, "Construct_AddressSanitizer.cpp");
+      cloneDebugLocWithNewFilename(I, "Construct_AddressSanitizer.cpp_5");
   IB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   Instruction *LoopInsertBefore = I;
@@ -1755,7 +1803,7 @@ void AddressSanitizer::instrumentMaskedLoadOrStore(
     IB.SetInsertPoint(LoopInsertBefore);
     // Debloat
     DebugLoc newLoc =
-        cloneDebugLocWithNewFilename(LoopInsertBefore, "AddressSanitizer.cpp");
+        cloneDebugLocWithNewFilename(LoopInsertBefore, "AddressSanitizer.cpp_6");
     IB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     // Cast EVL to IntptrTy.
@@ -1788,7 +1836,7 @@ void AddressSanitizer::instrumentMaskedLoadOrStore(
           IRB.SetInsertPoint(ThenTerm);
           // Debloat
           DebugLoc newLoc =
-              cloneDebugLocWithNewFilename(ThenTerm, "AddressSanitizer.cpp");
+              cloneDebugLocWithNewFilename(ThenTerm, "AddressSanitizer.cpp_7");
           IRB.SetCurrentDebugLocation(newLoc);
           // Debloat end
         }
@@ -1862,7 +1910,7 @@ void AddressSanitizer::instrumentMop(ObjectSizeOffsetVisitor &ObjSizeVis,
     IRBuilder IB(O.getInsn());
     // Debloat
     DebugLoc newLoc = cloneDebugLocWithNewFilename(
-        O.getInsn(), "Construct_AddressSanitizer.cpp");
+        O.getInsn(), "Construct_AddressSanitizer.cpp_8");
     IB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     Value *OffsetOp = O.MaybeByteOffset;
@@ -1902,9 +1950,13 @@ Instruction *AddressSanitizer::generateCrashCode(Instruction *InsertBefore,
   InstrumentationIRBuilder IRB(InsertBefore);
   // this not work because, after return, author set debug loc to original inst
   // Debloat
-  DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      InsertBefore, "AsanErrorCallback_AddressSanitizer.cpp");
-  IRB.SetCurrentDebugLocation(newLoc);
+  for(const Function &f: M.functions()) {
+    if(f.getSubprogram()) {
+      DebugLoc newLoc = cloneDebugLocWithNewFilename(
+      InsertBefore, "AsanErrorCallback_AddressSanitizer.cpp_9", &f);
+      IRB.SetCurrentDebugLocation(newLoc);
+    }
+  }
   // Debloat end
   Value *ExpVal = Exp == 0 ? nullptr : ConstantInt::get(IRB.getInt32Ty(), Exp);
   CallInst *Call = nullptr;
@@ -1960,7 +2012,7 @@ Instruction *AddressSanitizer::instrumentAMDGPUAddress(
   IRBuilder<> IRB(InsertBefore);
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      InsertBefore, "Construct_AddressSanitizer.cpp");
+      InsertBefore, "Construct_AddressSanitizer.cpp_10");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   Value *IsShared = IRB.CreateCall(AMDGPUAddressShared, {Addr});
@@ -1994,7 +2046,7 @@ Instruction *AddressSanitizer::genAMDGPUReportBlock(IRBuilder<> &IRB,
   Trm = SplitBlockAndInsertIfThen(Cond, Trm, false);
   IRB.SetInsertPoint(Trm);
   // Debloat
-  DebugLoc newLoc = cloneDebugLocWithNewFilename(Trm, "AddressSanitizer.cpp");
+  DebugLoc newLoc = cloneDebugLocWithNewFilename(Trm, "AddressSanitizer.cpp_11");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   return IRB.CreateCall(
@@ -2018,7 +2070,7 @@ void AddressSanitizer::instrumentAddress(Instruction *OrigIns,
   InstrumentationIRBuilder IRB(InsertBefore);
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      InsertBefore, "Instrumentation_AddressSanitizer.cpp");
+      InsertBefore, "Instrumentation_AddressSanitizer.cpp_12");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   size_t AccessSizeIndex = TypeStoreSizeToSizeIndex(TypeStoreSize);
@@ -2074,7 +2126,7 @@ void AddressSanitizer::instrumentAddress(Instruction *OrigIns,
     IRB.SetInsertPoint(CheckTerm);
     // Debloat
     DebugLoc newLoc =
-        cloneDebugLocWithNewFilename(CheckTerm, "AddressSanitizer.cpp");
+        cloneDebugLocWithNewFilename(CheckTerm, "AddressSanitizer.cpp_13");
     IRB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     Value *Cmp2 = createSlowPathCmp(IRB, AddrLong, ShadowValue, TypeStoreSize);
@@ -2098,7 +2150,7 @@ void AddressSanitizer::instrumentAddress(Instruction *OrigIns,
     Crash->setDebugLoc(OrigIns->getDebugLoc());
   // Debloat
   newLoc =
-      cloneDebugLocWithNewFilename(Crash, "CrashReport_AddressSanitizer.cpp");
+      cloneDebugLocWithNewFilename(Crash, "CrashReport_AddressSanitizer.cpp_14");
   Crash->setDebugLoc(newLoc);
   // Debloat end
 }
@@ -2114,7 +2166,7 @@ void AddressSanitizer::instrumentUnusualSizeOrAlignment(
   InstrumentationIRBuilder IRB(InsertBefore);
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      InsertBefore, "Instrumentation_AddressSanitizer.cpp");
+      InsertBefore, "Instrumentation_AddressSanitizer.cpp_15");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   Value *NumBits = IRB.CreateTypeSize(IntptrTy, TypeStoreSize);
@@ -2146,7 +2198,7 @@ void ModuleAddressSanitizer::poisonOneInitializer(Function &GlobalInit) {
                   GlobalInit.front().getFirstInsertionPt());
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      &GlobalInit.front().front(), "Construct_AddressSanitizer.cpp");
+      &GlobalInit.front().front(), "Construct_AddressSanitizer.cpp_16");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   // Add a call to poison all external globals before the given function starts.
@@ -2398,9 +2450,13 @@ StringRef ModuleAddressSanitizer::getGlobalMetadataSection() const {
 void ModuleAddressSanitizer::initializeCallbacks() {
   IRBuilder<> IRB(*C);
   // Debloat
-  DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp");
-  IRB.SetCurrentDebugLocation(newLoc);
+  for(const Function &f: M.functions()) {
+    if(f.getSubprogram()) {
+      DebugLoc newLoc = cloneDebugLocWithNewFilename(
+      ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp_17", &f);
+      IRB.SetCurrentDebugLocation(newLoc);
+    }
+  }
   // Debloat end
   // Declare our poisoning and unpoisoning functions.
   AsanPoisonGlobals =
@@ -2593,9 +2649,16 @@ void ModuleAddressSanitizer::instrumentGlobalsELF(
     Instruction *Dtor_inst = CreateAsanModuleDtor();
     IRBuilder<> IrbDtor(Dtor_inst);
     // Debloat
-    DebugLoc newLoc = cloneDebugLocWithNewFilename(
-        Dtor_inst, "Construct_AddressSanitizer.cpp");
-    IrbDtor.SetCurrentDebugLocation(newLoc);
+    for(const Function &f: M.functions()) {
+      if(f.getSubprogram()) {
+        DebugLoc newLoc = cloneDebugLocWithNewFilename(
+        Dtor_inst, "Construct_AddressSanitizer.cpp_18", &f);
+        IrbDtor.SetCurrentDebugLocation(newLoc);
+      }
+    } 
+    // DebugLoc newLoc = cloneDebugLocWithNewFilename(
+    //     Dtor_inst, "Construct_AddressSanitizer.cpp_18");
+    // IrbDtor.SetCurrentDebugLocation(newLoc);
     // Debloat end
     IrbDtor.CreateCall(AsanUnregisterElfGlobals,
                        {IRB.CreatePointerCast(RegisteredFlag, IntptrTy),
@@ -2661,7 +2724,7 @@ void ModuleAddressSanitizer::InstrumentGlobalsMachO(
     IRBuilder<> IrbDtor(Dtor_inst);
     // Debloat
     DebugLoc newLoc = cloneDebugLocWithNewFilename(
-        Dtor_inst, "Construct_AddressSanitizer.cpp");
+        Dtor_inst, "Construct_AddressSanitizer.cpp_19");
     IrbDtor.SetCurrentDebugLocation(newLoc);
     // Debloat end
     IrbDtor.CreateCall(AsanUnregisterImageGlobals,
@@ -2698,7 +2761,7 @@ void ModuleAddressSanitizer::InstrumentGlobalsWithMetadataArray(
     IRBuilder<> IrbDtor(Dtor_inst);
     // Debloat
     DebugLoc newLoc = cloneDebugLocWithNewFilename(
-        Dtor_inst, "Construct_AddressSanitizer.cpp");
+        Dtor_inst, "Construct_AddressSanitizer.cpp_20");
     IrbDtor.SetCurrentDebugLocation(newLoc);
     // Debloat end
     IrbDtor.CreateCall(AsanUnregisterGlobals,
@@ -2974,16 +3037,23 @@ bool ModuleAddressSanitizer::instrumentModule() {
       Instruction *CtorTerm = AsanCtorFunction->getEntryBlock().getTerminator();
       IRBuilder<> IRB(CtorTerm);
       // Debloat
-      DebugLoc newLoc = cloneDebugLocWithNewFilename(
-          CtorTerm, "Construct_AddressSanitizer.cpp");
-      IRB.SetCurrentDebugLocation(newLoc);
+      for(const Function &f: M.functions()) {
+        if(f.getSubprogram()) {
+          DebugLoc newLoc = cloneDebugLocWithNewFilename(
+          CtorTerm, "Construct_AddressSanitizer.cpp_21", &f);
+          IRB.SetCurrentDebugLocation(newLoc);
+        }
+      }
+      // DebugLoc newLoc = cloneDebugLocWithNewFilename(
+      //     CtorTerm, "Construct_AddressSanitizer.cpp_21");
+      // IRB.SetCurrentDebugLocation(newLoc);
       // Debloat end
       instrumentGlobals(IRB, &CtorComdat);
     } else {
       IRBuilder<> IRB(*C);
       // Debloat
       DebugLoc newLoc = cloneDebugLocWithNewFilename(
-          ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp");
+          ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp_22");
       IRB.SetCurrentDebugLocation(newLoc);
       // Debloat end
       instrumentGlobals(IRB, &CtorComdat);
@@ -3017,9 +3087,13 @@ bool ModuleAddressSanitizer::instrumentModule() {
 void AddressSanitizer::initializeCallbacks(const TargetLibraryInfo *TLI) {
   IRBuilder<> IRB(*C);
   // Debloat
-  DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp");
-  IRB.SetCurrentDebugLocation(newLoc);
+  for(const Function &f: M.functions()) {
+    if(f.getSubprogram()) {
+      DebugLoc newLoc = cloneDebugLocWithNewFilename(
+      ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp_23", &f);
+      IRB.SetCurrentDebugLocation(newLoc);
+    }
+  }
   // Debloat end
   // Create __asan_report* callbacks.
   // IsWrite, TypeSize and Exp are encoded in the function name.
@@ -3109,7 +3183,7 @@ bool AddressSanitizer::maybeInsertAsanInitAtFunctionEntry(Function &F) {
     IRBuilder<> IRB(&F.front(), F.front().begin());
     // Debloat
     DebugLoc newLoc = cloneDebugLocWithNewFilename(
-        &F.front().front(), "Construct_AddressSanitizer.cpp");
+        &F.front().front(), "Construct_AddressSanitizer.cpp_24", &F);
     IRB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     IRB.CreateCall(AsanInitFunction, {});
@@ -3126,7 +3200,7 @@ bool AddressSanitizer::maybeInsertDynamicShadowAtFunctionEntry(Function &F) {
   IRBuilder<> IRB(&F.front().front());
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      &F.front().front(), "Construct_AddressSanitizer.cpp");
+      &F.front().front(), "Construct_AddressSanitizer.cpp_25", &F);
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   if (Mapping.InGlobal) {
@@ -3336,7 +3410,7 @@ bool AddressSanitizer::instrumentFunction(Function &F,
     IRBuilder<> IRB(CI);
     // Debloat
     DebugLoc newLoc =
-        cloneDebugLocWithNewFilename(CI, "Construct_AddressSanitizer.cpp");
+        cloneDebugLocWithNewFilename(CI, "Construct_AddressSanitizer.cpp_26", &F);
     IRB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     RTCI.createRuntimeCall(IRB, AsanHandleNoReturnFunc, {});
@@ -3375,7 +3449,7 @@ void FunctionStackPoisoner::initializeCallbacks(Module &M) {
   IRBuilder<> IRB(*C);
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp");
+      ReturnInst::Create(*C), "Construct_AddressSanitizer.cpp_27", &F);
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   if (ASan.UseAfterReturn == AsanDetectStackUseAfterReturnMode::Always ||
@@ -3528,7 +3602,7 @@ void FunctionStackPoisoner::copyArgsPassedByValToAllocas() {
   IRBuilder<> IRB(CopyInsertPoint);
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      CopyInsertPoint, "Construct_AddressSanitizer.cpp");
+      CopyInsertPoint, "Construct_AddressSanitizer.cpp_28", &F);
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   const DataLayout &DL = F.getDataLayout();
@@ -3587,7 +3661,7 @@ void FunctionStackPoisoner::createDynamicAllocasInitStorage() {
   IRBuilder<> IRB(dyn_cast<Instruction>(FirstBB.begin()));
   // Debloat
   DebugLoc newLoc = cloneDebugLocWithNewFilename(
-      dyn_cast<Instruction>(FirstBB.begin()), "Construct_AddressSanitizer.cpp");
+      dyn_cast<Instruction>(FirstBB.begin()), "Construct_AddressSanitizer.cpp_29", &F);
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   DynamicAllocaLayout = IRB.CreateAlloca(IntptrTy, nullptr);
@@ -3611,7 +3685,7 @@ void FunctionStackPoisoner::processDynamicAllocas() {
     IRBuilder<> IRB(APC.InsBefore);
     // Debloat
     DebugLoc newLoc = cloneDebugLocWithNewFilename(
-        APC.InsBefore, "Construct_AddressSanitizer.cpp");
+        APC.InsBefore, "Construct_AddressSanitizer.cpp_30", &F);
     IRB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     poisonAlloca(APC.AI, APC.Size, IRB, APC.DoPoison);
@@ -3718,9 +3792,10 @@ void FunctionStackPoisoner::processStaticAllocas() {
 
   Instruction *InsBefore = AllocaVec[0];
   IRBuilder<> IRB(InsBefore);
+  // InsBefore has not debug location, use EntryDebugLocation for instrumentation.
   // Debloat
-  DebugLoc newLoc =
-      cloneDebugLocWithNewFilename(InsBefore, "Construct_AddressSanitizer.cpp");
+  DebugLoc newLoc = cloneDebugLocWithNewFilename(
+      &F, "Test_AddressSanitizer.cpp_31");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   // Make sure non-instrumented allocas stay in the entry block. Otherwise,
@@ -3834,7 +3909,7 @@ void FunctionStackPoisoner::processStaticAllocas() {
       IRBuilder<> IRBIf(Term);
       // Debloat
       DebugLoc newLoc =
-          cloneDebugLocWithNewFilename(Term, "Construct_AddressSanitizer.cpp");
+          cloneDebugLocWithNewFilename(Term, "Construct_AddressSanitizer.cpp_32", &F);
       IRBIf.SetCurrentDebugLocation(newLoc);
       // Debloat end
       StackMallocIdx = StackMallocSizeClass(LocalStackSize);
@@ -3844,7 +3919,7 @@ void FunctionStackPoisoner::processStaticAllocas() {
                                  ConstantInt::get(IntptrTy, LocalStackSize));
       IRB.SetInsertPoint(InsBefore);
       // Debloat
-      newLoc = cloneDebugLocWithNewFilename(InsBefore, "AddressSanitizer.cpp");
+      newLoc = cloneDebugLocWithNewFilename(InsBefore, "AddressSanitizer.cpp_33", &F);
       IRB.SetCurrentDebugLocation(newLoc);
       // Debloat end
       FakeStackInt = createPHI(IRB, UseAfterReturnIsEnabled, FakeStackValue,
@@ -3867,7 +3942,7 @@ void FunctionStackPoisoner::processStaticAllocas() {
     IRBuilder<> IRBIf(Term);
     // Debloat
     DebugLoc newLoc =
-        cloneDebugLocWithNewFilename(Term, "Construct_AddressSanitizer.cpp");
+        cloneDebugLocWithNewFilename(Term, "Construct_AddressSanitizer.cpp_34", &F);
     IRBIf.SetCurrentDebugLocation(newLoc);
     // Debloat end
     Value *AllocaValue =
@@ -3875,7 +3950,7 @@ void FunctionStackPoisoner::processStaticAllocas() {
 
     IRB.SetInsertPoint(InsBefore);
     // Debloat
-    newLoc = cloneDebugLocWithNewFilename(InsBefore, "AddressSanitizer.cpp");
+    newLoc = cloneDebugLocWithNewFilename(InsBefore, "AddressSanitizer.cpp_35", &F);
     IRB.SetCurrentDebugLocation(newLoc);
     // Debloat end
     LocalStackBase =
@@ -3942,7 +4017,7 @@ void FunctionStackPoisoner::processStaticAllocas() {
       IRBuilder<> IRB(APC.InsBefore);
       // Debloat
       DebugLoc newLoc = cloneDebugLocWithNewFilename(
-          APC.InsBefore, "Construct_AddressSanitizer.cpp");
+          APC.InsBefore, "Construct_AddressSanitizer.cpp_36");
       IRB.SetCurrentDebugLocation(newLoc);
       // Debloat end
       copyToShadow(ShadowAfterScope,
@@ -3968,12 +4043,14 @@ void FunctionStackPoisoner::processStaticAllocas() {
     IRBuilder<> IRBRet(Ret);
     // Debloat
     DebugLoc newLoc =
-        cloneDebugLocWithNewFilename(Ret, "Construct_AddressSanitizer.cpp");
+        cloneDebugLocWithNewFilename(Ret, "Construct_AddressSanitizer.cpp_37");
     IRBRet.SetCurrentDebugLocation(newLoc);
     // Debloat end
     // Mark the current frame as retired.
-    IRBRet.CreateStore(ConstantInt::get(IntptrTy, kRetiredStackFrameMagic),
+    // test
+    StoreInst* store = IRBRet.CreateStore(ConstantInt::get(IntptrTy, kRetiredStackFrameMagic),
                        LocalStackBase);
+    // test end
     if (DoStackMalloc) {
       assert(StackMallocIdx >= 0);
       // if FakeStack != 0  // LocalStackBase == FakeStack
@@ -3994,7 +4071,7 @@ void FunctionStackPoisoner::processStaticAllocas() {
       IRBuilder<> IRBPoison(ThenTerm);
       // Debloat
       DebugLoc newLoc = cloneDebugLocWithNewFilename(
-          ThenTerm, "Construct_AddressSanitizer.cpp");
+          ThenTerm, "Construct_AddressSanitizer.cpp_38");
       IRBPoison.SetCurrentDebugLocation(newLoc);
       // Debloat end
       if (ASan.MaxInlinePoisoningSize != 0 && StackMallocIdx <= 4) {
@@ -4020,7 +4097,7 @@ void FunctionStackPoisoner::processStaticAllocas() {
       IRBuilder<> IRBElse(ElseTerm);
       // Debloat
       newLoc = cloneDebugLocWithNewFilename(ElseTerm,
-                                            "Construct_AddressSanitizer.cpp");
+                                            "Construct_AddressSanitizer.cpp_39");
       IRBElse.SetCurrentDebugLocation(newLoc);
       // Debloat end
       copyToShadow(ShadowAfterScope, ShadowClean, IRBElse, ShadowBase);
@@ -4056,7 +4133,7 @@ void FunctionStackPoisoner::handleDynamicAllocaCall(AllocaInst *AI) {
   IRBuilder<> IRB(AI);
   // Debloat
   DebugLoc newLoc =
-      cloneDebugLocWithNewFilename(AI, "Construct_AddressSanitizer.cpp");
+      cloneDebugLocWithNewFilename(AI, "Construct_AddressSanitizer.cpp_40");
   IRB.SetCurrentDebugLocation(newLoc);
   // Debloat end
   const Align Alignment = std::max(Align(kAllocaRzSize), AI->getAlign());
